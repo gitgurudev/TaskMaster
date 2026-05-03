@@ -104,6 +104,23 @@ function PermissionMatrix({ allModules, permissions, onChange, loading }) {
   );
 }
 
+// ── Sort icon ─────────────────────────────────────────────────────────────────
+function SortIcon({ col, sort }) {
+  const active = sort.col === col;
+  return (
+    <span className={`ml-1 inline-flex flex-col leading-none transition-colors ${active ? 'text-indigo-400' : 'text-slate-600'}`}>
+      <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"
+        style={{ opacity: active && sort.dir === 'asc' ? 1 : 0.4 }}>
+        <path d="M4 0L7.5 6H.5z" />
+      </svg>
+      <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" className="mt-0.5"
+        style={{ opacity: active && sort.dir === 'desc' ? 1 : 0.4 }}>
+        <path d="M4 8L.5 2H7.5z" />
+      </svg>
+    </span>
+  );
+}
+
 // ── List view ─────────────────────────────────────────────────────────────────
 function ListView({ onAdd, onEdit }) {
   const [rows,       setRows]       = useState([]);
@@ -111,6 +128,7 @@ function ListView({ onAdd, onEdit }) {
   const [loading,    setLoading]    = useState(true);
   const [deleting,   setDeleting]   = useState(null);
   const [error,      setError]      = useState('');
+  const [sort,       setSort]       = useState({ col: null, dir: 'asc' });
 
   const load = useCallback(async (page = 1) => {
     setLoading(true);
@@ -149,6 +167,28 @@ function ListView({ onAdd, onEdit }) {
     : v === 'own' ? 'text-amber-400 bg-amber-400/10 border-amber-400/25'
     : 'text-slate-600 bg-slate-700/30 border-slate-700';
 
+  const toggleSort = (col) =>
+    setSort(prev =>
+      prev.col === col
+        ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { col, dir: 'asc' }
+    );
+
+  const sortedRows = [...rows].sort((a, b) => {
+    if (!sort.col) return 0;
+    let va, vb;
+    if (sort.col === 'name') {
+      va = a.name.toLowerCase();
+      vb = b.name.toLowerCase();
+    } else if (sort.col === 'permissions') {
+      va = (a.permissions || []).filter(p => p.view !== 'none').length;
+      vb = (b.permissions || []).filter(p => p.view !== 'none').length;
+    }
+    if (va < vb) return sort.dir === 'asc' ? -1 : 1;
+    if (va > vb) return sort.dir === 'asc' ?  1 : -1;
+    return 0;
+  });
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -176,8 +216,24 @@ function ListView({ onAdd, onEdit }) {
           <thead>
             <tr className="border-b border-slate-700/60">
               <th className="text-left px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-widest w-12">#</th>
-              <th className="text-left px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-widest">Role Name</th>
-              <th className="text-left px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-widest hidden md:table-cell">Permissions</th>
+              <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-widest text-left">
+                <button
+                  type="button"
+                  onClick={() => toggleSort('name')}
+                  className={`inline-flex items-center gap-0.5 hover:text-white transition-colors ${sort.col === 'name' ? 'text-indigo-400' : 'text-slate-400'}`}
+                >
+                  Role Name <SortIcon col="name" sort={sort} />
+                </button>
+              </th>
+              <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-widest text-left hidden md:table-cell">
+                <button
+                  type="button"
+                  onClick={() => toggleSort('permissions')}
+                  className={`inline-flex items-center gap-0.5 hover:text-white transition-colors ${sort.col === 'permissions' ? 'text-indigo-400' : 'text-slate-400'}`}
+                >
+                  Permissions <SortIcon col="permissions" sort={sort} />
+                </button>
+              </th>
               <th className="px-5 py-3 text-right text-[11px] font-semibold text-slate-400 uppercase tracking-widest">Actions</th>
             </tr>
           </thead>
@@ -198,7 +254,7 @@ function ListView({ onAdd, onEdit }) {
                 </td>
               </tr>
             ) : (
-              rows.map((role, idx) => {
+              sortedRows.map((role, idx) => {
                 const accessible = (role.permissions || []).filter(p => p.view !== 'none');
                 return (
                   <tr key={role._id} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
