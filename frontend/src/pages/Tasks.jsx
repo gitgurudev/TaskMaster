@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
-import Layout from '../components/Layout';
-import api from '../lib/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { io } from 'socket.io-client';
+import Layout   from '../components/Layout';
+import TaskChat from '../components/TaskChat';
+import api      from '../lib/api';
 
 const PAGE_SIZE = 5;
 
@@ -100,8 +102,8 @@ function FilterBar({ filters, onChange }) {
   return (
     <div className="flex gap-3 flex-wrap">
       {[
-        { key: 'status',   opts: statusOpts,   placeholder: 'All Status'   },
-        { key: 'priority', opts: priorityOpts, placeholder: 'All Priority' },
+        { key: 'status',   opts: statusOpts   },
+        { key: 'priority', opts: priorityOpts },
       ].map(({ key, opts }) => (
         <div key={key} className="relative">
           <select
@@ -124,13 +126,15 @@ function FilterBar({ filters, onChange }) {
 }
 
 // ── List view ────────────────────────────────────────────────────────────────
-function ListView({ onAdd, onEdit }) {
+function ListView({ onAdd, onEdit, onChat, unreadCounts }) {
   const storedUser = JSON.parse(localStorage.getItem('tm_user') || '{}');
   const taskPerm   = storedUser.permissions?.tasks || { view: 'none', create: false, edit: 'none', delete: 'none' };
   const myId       = storedUser.id;
 
   const canEdit   = (t) => taskPerm.edit   === 'all' || (taskPerm.edit   === 'own' && (t.assignedTo?._id === myId || t.createdBy?._id === myId));
   const canDelete = (t) => taskPerm.delete === 'all' || (taskPerm.delete === 'own' && (t.assignedTo?._id === myId || t.createdBy?._id === myId));
+  // Chat is available to the assignee, the creator, or an admin
+  const canChat   = (t) => taskPerm.edit === 'all' || t.assignedTo?._id === myId || t.createdBy?._id === myId;
 
   const [rows,       setRows]       = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
@@ -157,11 +161,9 @@ function ListView({ onAdd, onEdit }) {
     }
   }, [filters]);
 
-  useEffect(() => { load(1, filters); }, [filters]);  // eslint-disable-line
+  useEffect(() => { load(1, filters); }, [filters]); // eslint-disable-line
 
-  const handleFilterChange = (newFilters) => {
-    setFilters(newFilters);
-  };
+  const handleFilterChange = (newFilters) => setFilters(newFilters);
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this task?')) return;
@@ -180,10 +182,10 @@ function ListView({ onAdd, onEdit }) {
 
   const formatDue = (date) => {
     if (!date) return null;
-    const d   = new Date(date);
-    const now = new Date();
+    const d       = new Date(date);
+    const now     = new Date();
     const diffDays = Math.ceil((d - now) / (1000 * 60 * 60 * 24));
-    const label = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const label   = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
     if (diffDays < 0)  return { label, cls: 'text-red-400' };
     if (diffDays <= 2) return { label, cls: 'text-amber-400' };
     return { label, cls: 'text-slate-400' };
@@ -237,7 +239,7 @@ function ListView({ onAdd, onEdit }) {
             {loading ? (
               Array.from({ length: PAGE_SIZE }).map((_, i) => (
                 <tr key={i} className="border-b border-slate-700/30">
-                  {[32, 180, 110, 80, 90, 80, 80].map((w, j) => (
+                  {[32, 180, 110, 80, 90, 80, 100].map((w, j) => (
                     <td key={j} className="px-5 py-4">
                       <div className="h-3.5 rounded bg-slate-700 animate-pulse" style={{ width: w }} />
                     </td>
@@ -252,7 +254,8 @@ function ListView({ onAdd, onEdit }) {
               </tr>
             ) : (
               rows.map((task, idx) => {
-                const due = formatDue(task.dueDate);
+                const due   = formatDue(task.dueDate);
+                const count = unreadCounts[task._id] || 0;
                 return (
                   <tr key={task._id} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
                     <td className="px-5 py-3.5 text-slate-500 tabular-nums">
@@ -283,6 +286,24 @@ function ListView({ onAdd, onEdit }) {
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center justify-end gap-2">
+                        {/* Chat button — visible to assignee, creator, or admin */}
+                        {canChat(task) && (
+                          <button
+                            type="button"
+                            onClick={() => onChat(task)}
+                            className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-violet-400 bg-violet-500/10 border border-violet-500/25 hover:bg-violet-500/20 transition-colors"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+                            </svg>
+                            Chat
+                            {count > 0 && (
+                              <span className="absolute -top-2 -right-2 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-0.5 text-[10px] font-bold text-white leading-none">
+                                {count > 9 ? '9+' : count}
+                              </span>
+                            )}
+                          </button>
+                        )}
                         {canEdit(task) && (
                           <button type="button" onClick={() => onEdit(task)}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-indigo-400 bg-indigo-500/10 border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors">
@@ -299,7 +320,7 @@ function ListView({ onAdd, onEdit }) {
                             Delete
                           </button>
                         )}
-                        {!canEdit(task) && !canDelete(task) && (
+                        {!canChat(task) && !canEdit(task) && !canDelete(task) && (
                           <span className="text-xs text-slate-600 italic">View only</span>
                         )}
                       </div>
@@ -343,7 +364,6 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
   const isEdit    = !!initial;
   const currUser  = JSON.parse(localStorage.getItem('tm_user') || '{}');
   const isAdmin   = currUser.role === 'Admin';
-  // Non-admin editing an existing task → only status is editable
   const statusOnly = isEdit && !isAdmin;
 
   const [form, setForm] = useState({
@@ -363,14 +383,12 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
   const [dropLoading, setDropLoading] = useState(true);
   const [error,       setError]       = useState('');
 
-  // Users filtered by selected department
   const filteredUsers = form.department
     ? allUsers.filter(u => u.department?._id === form.department)
     : allUsers;
 
   const set = (key) => (val) => setForm(prev => ({ ...prev, [key]: val }));
 
-  // When department changes, reset assignedTo if that user isn't in the new list
   const handleDeptChange = (deptId) => {
     setForm(prev => {
       const userStillValid = deptId
@@ -397,7 +415,6 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
     e.preventDefault();
     if (!statusOnly && !form.title.trim()) { setError('Title is required'); return; }
     setError('');
-    // Non-admin editing: send only status change
     if (statusOnly) {
       onSubmit({ status: form.status });
       return;
@@ -418,7 +435,6 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
 
   return (
     <div className="max-w-2xl space-y-5">
-      {/* Header */}
       <div className="flex items-center gap-3">
         <button type="button" onClick={onBack} className="text-slate-400 hover:text-white transition-colors">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
@@ -430,8 +446,6 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
       </div>
 
       <div className="rounded-xl border border-slate-700/60 bg-slate-800/50 p-6">
-
-        {/* Status-only notice for non-admin */}
         {statusOnly && (
           <div className="mb-5 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/25 px-4 py-3 text-sm text-amber-400">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -440,8 +454,6 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-
-          {/* Title */}
           <div>
             <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1.5">
               Title {!statusOnly && <span className="text-red-400">*</span>}
@@ -461,11 +473,8 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
             />
           </div>
 
-          {/* Description */}
           <div>
-            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1.5">
-              Description
-            </label>
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1.5">Description</label>
             <textarea
               value={form.description}
               onChange={e => set('description')(e.target.value)}
@@ -481,7 +490,6 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
             />
           </div>
 
-          {/* Assigned To + Department */}
           {dropLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="h-[62px] rounded-lg bg-slate-700/40 animate-pulse" />
@@ -489,24 +497,11 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
             </div>
           ) : (
             <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${statusOnly ? 'opacity-40 pointer-events-none' : ''}`}>
-              <RefSelectField
-                label="Department"
-                value={form.department}
-                onChange={handleDeptChange}
-                options={departments}
-                placeholder="No department"
-              />
-              <RefSelectField
-                label="Assigned To"
-                value={form.assignedTo}
-                onChange={set('assignedTo')}
-                options={filteredUsers.map(u => ({ _id: u._id, label: u.name }))}
-                placeholder="Unassigned"
-              />
+              <RefSelectField label="Department" value={form.department} onChange={handleDeptChange} options={departments} placeholder="No department" />
+              <RefSelectField label="Assigned To" value={form.assignedTo} onChange={set('assignedTo')} options={filteredUsers.map(u => ({ _id: u._id, label: u.name }))} placeholder="Unassigned" />
             </div>
           )}
 
-          {/* Priority + Status */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className={statusOnly ? 'opacity-40 pointer-events-none' : ''}>
               <SelectField label="Priority" value={form.priority} onChange={set('priority')} options={priorityOptions} />
@@ -514,11 +509,8 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
             <SelectField label="Status" value={form.status} onChange={set('status')} options={statusOptions} />
           </div>
 
-          {/* Due Date */}
           <div className={statusOnly ? 'opacity-40 pointer-events-none' : ''}>
-            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1.5">
-              Due Date
-            </label>
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1.5">Due Date</label>
             <input
               type="date"
               value={form.dueDate}
@@ -557,10 +549,52 @@ function TaskForm({ initial, onBack, onSubmit, submitLabel, saving }) {
 
 // ── Main page ────────────────────────────────────────────────────────────────
 export default function Tasks() {
-  const [view,       setView]       = useState('list');
-  const [editTarget, setEditTarget] = useState(null);
-  const [saving,     setSaving]     = useState(false);
-  const [listKey,    setListKey]    = useState(0);
+  const [view,         setView]         = useState('list');
+  const [editTarget,   setEditTarget]   = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [listKey,      setListKey]      = useState(0);
+  const [chatTask,     setChatTask]     = useState(null);
+  const [unreadCounts, setUnreadCounts] = useState({});
+
+  const socketRef     = useRef(null);
+  const chatTaskIdRef = useRef(null); // ref so socket listener always sees current value
+
+  // Keep ref in sync with chatTask state
+  useEffect(() => { chatTaskIdRef.current = chatTask?._id || null; }, [chatTask]);
+
+  // Set up socket.io connection on mount
+  useEffect(() => {
+    const token = localStorage.getItem('tm_token');
+    if (!token) return;
+
+    const socket = io('http://localhost:5000', { auth: { token } });
+    socketRef.current = socket;
+
+    // Fetch initial unread counts from server
+    api.get('/api/tasks/unread')
+      .then(r => setUnreadCounts(r.data))
+      .catch(() => {});
+
+    // When a new message arrives for a task we're not currently viewing, bump the badge
+    socket.on('task_notification', ({ taskId }) => {
+      if (chatTaskIdRef.current !== taskId) {
+        setUnreadCounts(prev => ({ ...prev, [taskId]: (prev[taskId] || 0) + 1 }));
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, []);
+
+  const openChat = (task) => {
+    setChatTask(task);
+    // Optimistically clear the badge — server marks read when chat mounts
+    setUnreadCounts(prev => ({ ...prev, [task._id]: 0 }));
+  };
+
+  const closeChat = () => setChatTask(null);
 
   const goList   = () => { setView('list'); setListKey(k => k + 1); };
   const goCreate = () => { setEditTarget(null); setView('create'); };
@@ -590,13 +624,25 @@ export default function Tasks() {
     }
   };
 
+  const currUser = JSON.parse(localStorage.getItem('tm_user') || '{}');
+
   return (
     <Layout>
       <div className="fade-up">
-        {view === 'list'   && <ListView  key={listKey} onAdd={goCreate} onEdit={goEdit} />}
+        {view === 'list'   && <ListView  key={listKey} onAdd={goCreate} onEdit={goEdit} onChat={openChat} unreadCounts={unreadCounts} />}
         {view === 'create' && <TaskForm  onBack={goList} onSubmit={handleCreate} submitLabel="Create Task" saving={saving} />}
         {view === 'edit'   && <TaskForm  initial={editTarget} onBack={goList} onSubmit={handleUpdate} submitLabel="Update Task" saving={saving} />}
       </div>
+
+      {/* Chat drawer — rendered outside layout flow so it overlays everything */}
+      {chatTask && socketRef.current && (
+        <TaskChat
+          task={chatTask}
+          socket={socketRef.current}
+          currentUserId={currUser.id}
+          onClose={closeChat}
+        />
+      )}
     </Layout>
   );
 }

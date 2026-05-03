@@ -1,7 +1,11 @@
 import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import mongoose from 'mongoose';
+import express       from 'express';
+import cors          from 'cors';
+import mongoose      from 'mongoose';
+import { createServer } from 'http';
+import { Server }    from 'socket.io';
+import jwt           from 'jsonwebtoken';
+import { setIO }     from './socket.js';
 import authRoutes       from './routes/auth.js';
 import departmentRoutes from './routes/departments.js';
 import moduleRoutes     from './routes/modules.js';
@@ -12,8 +16,14 @@ import dashboardRoutes  from './routes/dashboard.js';
 import Module from './models/Module.js';
 import Role   from './models/Role.js';
 
-const app  = express();
+const app        = express();
+const httpServer = createServer(app);
+const io         = new Server(httpServer, {
+  cors: { origin: 'http://localhost:5173', credentials: true },
+});
 const PORT = process.env.PORT || 5000;
+
+setIO(io);
 
 app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json());
@@ -27,6 +37,26 @@ app.use('/api/tasks',       taskRoutes);
 app.use('/api/dashboard',   dashboardRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
+
+// ── Socket.io auth ────────────────────────────────────────────────────────────
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) return next(new Error('Unauthorized'));
+  try {
+    socket.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    next(new Error('Invalid token'));
+  }
+});
+
+io.on('connection', (socket) => {
+  // Each user joins their personal notification room on connect
+  socket.join(`user:${socket.user.id}`);
+
+  socket.on('join_task',  (taskId) => socket.join(`task:${taskId}`));
+  socket.on('leave_task', (taskId) => socket.leave(`task:${taskId}`));
+});
 
 // ── Seed modules & default Admin role ────────────────────────────────────────
 const MODULE_DEFS = [
@@ -46,7 +76,6 @@ const ADMIN_PERMS = (defs) => defs.map(m => ({
 }));
 
 async function seed() {
-  // Upsert every module definition
   await Promise.all(
     MODULE_DEFS.map(m =>
       Module.findOneAndUpdate({ key: m.key }, m, { upsert: true, returnDocument: 'after' })
@@ -60,12 +89,13 @@ async function seed() {
     await Role.create({ name: 'Admin', permissions: adminPerms, isSystem: true });
     console.log('Seeded: Admin role');
   } else {
-    // Sync: ensure every current module exists in admin permissions at full access
     const existingKeys = (admin.permissions || []).map(p => p.key);
     const missing      = adminPerms.filter(p => !existingKeys.includes(p.key));
     if (missing.length || !admin.permissions?.length) {
-      const existingMap  = Object.fromEntries((admin.permissions || []).map(p => [p.key, p.toObject ? p.toObject() : p]));
-      const mergedPerms  = adminPerms.map(ap => existingMap[ap.key] || ap);
+      const existingMap = Object.fromEntries(
+        (admin.permissions || []).map(p => [p.key, p.toObject ? p.toObject() : p])
+      );
+      const mergedPerms = adminPerms.map(ap => existingMap[ap.key] || ap);
       await Role.updateOne({ _id: admin._id }, { $set: { permissions: mergedPerms } });
       console.log('Admin permissions synced');
     }
@@ -77,7 +107,7 @@ mongoose
   .then(async () => {
     console.log('MongoDB connected');
     await seed();
-    app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+    httpServer.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
   })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message);
