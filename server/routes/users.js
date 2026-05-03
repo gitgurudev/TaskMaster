@@ -11,16 +11,20 @@ const POPULATE = [
   { path: 'role',       select: 'name modules' },
 ];
 
-// GET /api/users?page=1&limit=5
+// GET /api/users?page=1&limit=5&department=<id>&role=<id>
 router.get('/', async (req, res) => {
   try {
     const page  = Math.max(1, parseInt(req.query.page)  || 1);
     const limit = Math.max(1, parseInt(req.query.limit) || 5);
     const skip  = (page - 1) * limit;
 
+    const filter = {};
+    if (req.query.department) filter.department = req.query.department;
+    if (req.query.role)       filter.role       = req.query.role;
+
     const [users, total] = await Promise.all([
-      User.find().populate(POPULATE).sort({ createdAt: -1 }).skip(skip).limit(limit),
-      User.countDocuments(),
+      User.find(filter).populate(POPULATE).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      User.countDocuments(filter),
     ]);
 
     // strip password from response

@@ -92,12 +92,27 @@ function ListView({ onAdd, onEdit }) {
   const [deleting,   setDeleting]   = useState(null);
   const [error,      setError]      = useState('');
   const [sort,       setSort]       = useState({ col: null, dir: 'asc' });
+  const [filters,    setFilters]    = useState({ department: '', role: '' });
+  const [filterOpts, setFilterOpts] = useState({ departments: [], roles: [] });
 
-  const load = useCallback(async (page = 1) => {
+  // Load department + role options for filter dropdowns once
+  useEffect(() => {
+    Promise.all([
+      api.get('/api/departments?page=1&limit=100'),
+      api.get('/api/roles?page=1&limit=100'),
+    ]).then(([dRes, rRes]) => {
+      setFilterOpts({ departments: dRes.data.departments, roles: rRes.data.roles });
+    }).catch(() => {});
+  }, []);
+
+  const load = useCallback(async (page = 1, f = filters) => {
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get(`/api/users?page=${page}&limit=${PAGE_SIZE}`);
+      const params = new URLSearchParams({ page, limit: PAGE_SIZE });
+      if (f.department) params.set('department', f.department);
+      if (f.role)       params.set('role',       f.role);
+      const { data } = await api.get(`/api/users?${params}`);
       setRows(data.users);
       setPagination(data.pagination);
     } catch (err) {
@@ -105,9 +120,17 @@ function ListView({ onAdd, onEdit }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filters]);
 
-  useEffect(() => { load(1); }, [load]);
+  useEffect(() => { load(1, filters); }, [filters]); // eslint-disable-line
+
+  const handleFilterChange = (key, val) => {
+    setFilters(prev => ({ ...prev, [key]: val }));
+  };
+
+  const clearFilters = () => setFilters({ department: '', role: '' });
+
+  const activeFilterCount = [filters.department, filters.role].filter(Boolean).length;
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this user?')) return;
@@ -155,22 +178,80 @@ function ListView({ onAdd, onEdit }) {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-white">User Management</h1>
           <p className="text-xs text-slate-400 mt-0.5">
             {pagination.total} user{pagination.total !== 1 ? 's' : ''} total
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onAdd}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
-          style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add User
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Department filter */}
+          <div className="relative">
+            <select
+              value={filters.department}
+              onChange={e => handleFilterChange('department', e.target.value)}
+              style={{ colorScheme: 'dark' }}
+              className={`appearance-none rounded-lg border pl-3 pr-8 py-2 text-xs outline-none transition-colors cursor-pointer ${
+                filters.department
+                  ? 'border-indigo-500/60 bg-indigo-500/10 text-indigo-300'
+                  : 'border-slate-700 bg-slate-800/60 text-slate-300'
+              }`}
+            >
+              <option value="" className="bg-slate-800 text-slate-300">All Departments</option>
+              {filterOpts.departments.map(d => (
+                <option key={d._id} value={d._id} className="bg-slate-800 text-white">{d.name}</option>
+              ))}
+            </select>
+            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
+            </span>
+          </div>
+
+          {/* Role filter */}
+          <div className="relative">
+            <select
+              value={filters.role}
+              onChange={e => handleFilterChange('role', e.target.value)}
+              style={{ colorScheme: 'dark' }}
+              className={`appearance-none rounded-lg border pl-3 pr-8 py-2 text-xs outline-none transition-colors cursor-pointer ${
+                filters.role
+                  ? 'border-indigo-500/60 bg-indigo-500/10 text-indigo-300'
+                  : 'border-slate-700 bg-slate-800/60 text-slate-300'
+              }`}
+            >
+              <option value="" className="bg-slate-800 text-slate-300">All Roles</option>
+              {filterOpts.roles.map(r => (
+                <option key={r._id} value={r._id} className="bg-slate-800 text-white">{r.name}</option>
+              ))}
+            </select>
+            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
+            </span>
+          </div>
+
+          {/* Clear filters */}
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-slate-400 border border-slate-600 hover:bg-slate-700 hover:text-white transition-colors"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              Clear {activeFilterCount > 1 ? `(${activeFilterCount})` : ''}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
+            style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add User
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -291,17 +372,17 @@ function ListView({ onAdd, onEdit }) {
           <div className="flex items-center justify-between px-5 py-3 border-t border-slate-700/60">
             <p className="text-xs text-slate-400">Page {pagination.page} of {pagination.pages}</p>
             <div className="flex gap-1.5">
-              <button type="button" onClick={() => load(pagination.page - 1)} disabled={pagination.page <= 1}
+              <button type="button" onClick={() => load(pagination.page - 1, filters)} disabled={pagination.page <= 1}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 border border-slate-600 hover:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
                 ← Prev
               </button>
               {Array.from({ length: pagination.pages }, (_, i) => i + 1).map(p => (
-                <button key={p} type="button" onClick={() => load(p)}
+                <button key={p} type="button" onClick={() => load(p, filters)}
                   className={`w-8 h-8 rounded-lg text-xs font-semibold transition-colors ${p === pagination.page ? 'bg-indigo-500 text-white' : 'text-slate-400 border border-slate-600 hover:bg-slate-700'}`}>
                   {p}
                 </button>
               ))}
-              <button type="button" onClick={() => load(pagination.page + 1)} disabled={pagination.page >= pagination.pages}
+              <button type="button" onClick={() => load(pagination.page + 1, filters)} disabled={pagination.page >= pagination.pages}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 border border-slate-600 hover:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
                 Next →
               </button>
