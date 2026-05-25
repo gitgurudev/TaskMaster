@@ -2,3 +2,12 @@ node_modules/
 dist/
 .env
 .env.local
+.env.production
+*.local
+.DS_Store
+Thumbs.db
+server/node_modules/
+frontend/node_modules/
+coverage/
+*.log
+npm-debug.log*
